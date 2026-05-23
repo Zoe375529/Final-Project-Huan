@@ -12,9 +12,11 @@
 #   do over the following 3/6/12/24 months historically? This app shows
 #   the answer directly using FRED data.
 #
-#   Two of the three proposed modules are implemented:
+#   All three proposed modules are implemented:
 #
 #     Module 1: Signal Explorer
+#     Module 2: Recession Dashboard
+#     Module 3: "What If" Counterfactual Rule Simulator
 # =============================================================================
 
 
@@ -490,14 +492,18 @@ ui <- dashboardPage(
     titleWidth = 320
   ),
   
-  sidebarMenu(
-    id = "tabs",
-    menuItem("About",                  tabName = "about",     icon = icon("info-circle")),
-    menuItem("1. Signal Explorer",     tabName = "signal",    icon = icon("chart-line")),
-    menuItem("2. Recession Dashboard", tabName = "dashboard", icon = icon("gauge")),
-    menuItem("3. What If Simulator",   tabName = "whatif",    icon = icon("flask"))
+  # ---- Sidebar menu ----
+  dashboardSidebar(
+    width = 320,
+    sidebarMenu(
+      id = "tabs",
+      menuItem("About",                  tabName = "about",     icon = icon("info-circle")),
+      menuItem("1. Signal Explorer",     tabName = "signal",    icon = icon("chart-line")),
+      menuItem("2. Recession Dashboard", tabName = "dashboard", icon = icon("gauge")),
+      menuItem("3. What If Simulator",   tabName = "whatif",    icon = icon("flask"))
+    )
   ),
-
+  
   # ---- Main body ----
   dashboardBody(
     
@@ -540,6 +546,11 @@ ui <- dashboardPage(
                 <li><b>Recession Dashboard:</b> current readings vs typical
                 pre-recession readings, with a heat-map summary of each
                 indicator's predictive track record.</li>
+                <li><b>What If Simulator:</b> design a defensive trading rule
+                (e.g. cut equity exposure by 50% when the yield curve inverts)
+                and simulate how it would have performed over the past several
+                decades vs simple buy-and-hold. Highlights the trade-off between
+                avoiding drawdowns and missing recoveries.</li>
               </ul>
 
               <h4 style='color:", COL_PRIMARY, "; margin-top:22px;'>How to use the Signal Explorer</h4>
@@ -577,9 +588,6 @@ ui <- dashboardPage(
 
               <p style='margin-top:22px;'><b>Data:</b> FRED via the
               <code>fredr</code> package.</p>
-              <p><b>Still to build:</b> Module 3 (the &quot;What If&quot;
-              counterfactual rule simulator), additional summary statistics,
-              and a styling pass for mobile.</p>
             "))
                 )
               )
@@ -787,6 +795,104 @@ ui <- dashboardPage(
                track record at which horizons."
                     )),
                     plotlyOutput("dash_heatmap", height = "440px")
+                )
+              )
+      ),
+      
+      # ===========================================================
+      # MODULE 3: What If Counterfactual Rule Simulator
+      # ===========================================================
+      tabItem(tabName = "whatif",
+              
+              # ---- Row 1: rule configuration panel + portfolio chart ----
+              fluidRow(
+                box(width = 4, title = "Design Your Defensive Rule",
+                    status = "primary", solidHeader = TRUE,
+                    selectInput("wi_indicator", "Signal indicator:",
+                                choices = setNames(
+                                  explorer_indicators$id,
+                                  paste0("[", explorer_indicators$group, "] ",
+                                         explorer_indicators$label)
+                                ),
+                                selected = "T10Y2Y"),
+                    radioButtons("wi_direction", "Trigger when value is:",
+                                 choices = c("Below threshold" = "below",
+                                             "Above threshold" = "above"),
+                                 selected = "below"),
+                    numericInput("wi_threshold", "Threshold value:",
+                                 value = 0, step = 0.1),
+                    sliderInput("wi_reduce_pct",
+                                "Reduce equity exposure to (% invested when signal is ON):",
+                                min = 0, max = 100, value = 50, step = 10,
+                                post = "%"),
+                    sliderInput("wi_hold_months",
+                                "Hold defensive position for (months after signal turns off):",
+                                min = 0, max = 24, value = 6, step = 1),
+                    numericInput("wi_start_year", "Backtest start year:",
+                                 value = 1980, min = 1971, max = 2020, step = 1),
+                    helpText("Cash earns 0% in this simplified simulation. The benchmark is 100% buy-and-hold.")
+                ),
+                box(width = 8, title = "Portfolio Value Over Time",
+                    status = "info", solidHeader = TRUE,
+                    div(class = "chart-help", HTML(
+                      "<strong>How to read:</strong> Both lines start at $100 in your
+                chosen start year.
+                The <strong style='color:#1F3A5F;'>dark blue line</strong> is the
+                buy-and-hold benchmark (100% invested in equities the entire
+                time).
+                The <strong style='color:#C9A961;'>gold line</strong> is your
+                defensive rule: it pulls money out of equities whenever your
+                signal is triggered and waits the chosen hold period before
+                going back in.
+                The <strong>grey bands</strong> are NBER recessions.
+                If the gold line ends above the blue line, your rule beat
+                buy-and-hold; if it ends below, the false alarms cost you
+                more than the avoided drawdowns saved you."
+                    )),
+                    plotlyOutput("wi_portfolio_chart", height = "350px")
+                )
+              ),
+              
+              # ---- Row 2: summary stats ----
+              fluidRow(
+                box(width = 12, title = "Summary Statistics",
+                    status = "success", solidHeader = TRUE,
+                    div(class = "chart-help", HTML(
+                      "<strong>How to read:</strong> The numbers below compare your
+                rule against buy-and-hold over the chosen backtest window.
+                <em>Total return</em> is the cumulative percentage growth.
+                <em>Annualized return</em> annualizes that to a per-year rate.
+                <em>Max drawdown</em> is the worst peak-to-trough decline
+                (smaller is better &mdash; less painful to live through).
+                <em>Months out of market</em> shows how often the rule had
+                you on the sidelines."
+                    )),
+                    DTOutput("wi_stats_table")
+                )
+              ),
+              
+              # ---- Row 3: signal-on periods visualization ----
+              fluidRow(
+                box(width = 12, title = "When Was the Rule Defensive?",
+                    status = "info", solidHeader = TRUE,
+                    div(class = "chart-help", HTML(
+                      "<strong>How to read:</strong> Shows the indicator's history
+                over the backtest period. The <strong>gold dashed line</strong>
+                is your threshold. <strong>Pink shaded regions</strong> are
+                months when your rule was in defensive mode (equity exposure
+                reduced). Compare these to the <strong>grey recession bands</strong>:
+                early warnings before recessions are good; defensive periods
+                far from any recession are false alarms that hurt returns."
+                    )),
+                    plotlyOutput("wi_signal_timeline", height = "300px")
+                )
+              ),
+              
+              # ---- Row 4: interpretation guide ----
+              fluidRow(
+                box(width = 12, title = "Interpreting Your Results",
+                    status = "info", solidHeader = TRUE,
+                    uiOutput("wi_interpretation")
                 )
               )
       )
@@ -1286,292 +1392,291 @@ server <- function(input, output, session) {
             axis.text = element_text(size = 8),
             panel.spacing = unit(1.2, "lines"))
   })
-}
-
-
-# ============================================================
-# MODULE 3: WHAT IF COUNTERFACTUAL SIMULATOR
-# ============================================================
-# Logic flow:
-#   1. Build a monthly time series of: equity returns + signal status
-#   2. For each month, decide how much equity exposure the rule has
-#      (100% when signal off; user-chosen % when signal on or within
-#      the "hold" window after signal turned off)
-#   3. Compound returns to get the rule's portfolio value vs buy-and-hold
-#   4. Report summary stats and visualize
-
-# Core backtest engine - returns a tibble of monthly portfolio values
-whatif_backtest <- reactive({
-  req(input$wi_indicator, input$wi_threshold,
-      input$wi_reduce_pct, input$wi_start_year)
   
-  # ---- 1. Get the signal indicator monthly ----
-  sig_df <- get_series(input$wi_indicator) |> to_monthly()
-  if (nrow(sig_df) == 0) return(NULL)
   
-  # ---- 2. Get equity monthly returns ----
-  # Compute month-over-month % change of NASDAQCOM
-  eq <- sp500_monthly |>
-    arrange(date) |>
-    mutate(eq_ret = value / dplyr::lag(value) - 1) |>
-    select(date, eq_ret)
+  # ============================================================
+  # MODULE 3: WHAT IF COUNTERFACTUAL SIMULATOR
+  # ============================================================
+  # Logic flow:
+  #   1. Build a monthly time series of: equity returns + signal status
+  #   2. For each month, decide how much equity exposure the rule has
+  #      (100% when signal off; user-chosen % when signal on or within
+  #      the "hold" window after signal turned off)
+  #   3. Compound returns to get the rule's portfolio value vs buy-and-hold
+  #   4. Report summary stats and visualize
   
-  # ---- 3. Merge signal + equity, restrict to backtest window ----
-  df <- sig_df |>
-    rename(signal_val = value) |>
-    inner_join(eq, by = "date") |>
-    filter(year(date) >= input$wi_start_year) |>
-    filter(!is.na(eq_ret)) |>
-    arrange(date)
-  
-  if (nrow(df) < 24) return(NULL)
-  
-  # ---- 4. Flag months where the signal is "on" ----
-  df <- df |>
-    mutate(signal_on = if (input$wi_direction == "below") {
-      signal_val < input$wi_threshold
-    } else {
-      signal_val > input$wi_threshold
-    })
-  
-  # ---- 5. Extend "signal on" forward by the hold period ----
-  # When signal turns off, the rule stays defensive for wi_hold_months
-  # extra months before going back to 100% equity.
-  hold <- input$wi_hold_months
-  defensive <- df$signal_on
-  if (hold > 0 && any(df$signal_on)) {
-    for (i in seq_along(defensive)) {
-      if (df$signal_on[i]) {
-        # mark next `hold` months as defensive too
-        end_idx <- min(i + hold, length(defensive))
-        defensive[i:end_idx] <- TRUE
+  # Core backtest engine - returns a tibble of monthly portfolio values
+  whatif_backtest <- reactive({
+    req(input$wi_indicator, input$wi_threshold,
+        input$wi_reduce_pct, input$wi_start_year)
+    
+    # ---- 1. Get the signal indicator monthly ----
+    sig_df <- get_series(input$wi_indicator) |> to_monthly()
+    if (nrow(sig_df) == 0) return(NULL)
+    
+    # ---- 2. Get equity monthly returns ----
+    # Compute month-over-month % change of NASDAQCOM
+    eq <- sp500_monthly |>
+      arrange(date) |>
+      mutate(eq_ret = value / dplyr::lag(value) - 1) |>
+      select(date, eq_ret)
+    
+    # ---- 3. Merge signal + equity, restrict to backtest window ----
+    df <- sig_df |>
+      rename(signal_val = value) |>
+      inner_join(eq, by = "date") |>
+      filter(year(date) >= input$wi_start_year) |>
+      filter(!is.na(eq_ret)) |>
+      arrange(date)
+    
+    if (nrow(df) < 24) return(NULL)
+    
+    # ---- 4. Flag months where the signal is "on" ----
+    df <- df |>
+      mutate(signal_on = if (input$wi_direction == "below") {
+        signal_val < input$wi_threshold
+      } else {
+        signal_val > input$wi_threshold
+      })
+    
+    # ---- 5. Extend "signal on" forward by the hold period ----
+    # When signal turns off, the rule stays defensive for wi_hold_months
+    # extra months before going back to 100% equity.
+    hold <- input$wi_hold_months
+    defensive <- df$signal_on
+    if (hold > 0 && any(df$signal_on)) {
+      for (i in seq_along(defensive)) {
+        if (df$signal_on[i]) {
+          # mark next `hold` months as defensive too
+          end_idx <- min(i + hold, length(defensive))
+          defensive[i:end_idx] <- TRUE
+        }
       }
     }
-  }
-  df$defensive <- defensive
+    df$defensive <- defensive
+    
+    # ---- 6. Compute equity exposure each month ----
+    # 100% when not defensive; user-chosen % when defensive
+    # Cash portion earns 3% annualized (approx. T-bill / money market yield)
+    reduce_frac <- input$wi_reduce_pct / 100
+    cash_monthly_ret <- 0.03 / 12
+    df <- df |>
+      mutate(exposure = ifelse(defensive, reduce_frac, 1),
+             rule_ret = exposure * eq_ret + (1 - exposure) * cash_monthly_ret)
+    
+    # ---- 7. Compound returns into portfolio values starting at $100 ----
+    df <- df |>
+      mutate(buyhold_val = 100 * cumprod(1 + eq_ret),
+             rule_val    = 100 * cumprod(1 + rule_ret))
+    
+    df
+  })
   
-  # ---- 6. Compute equity exposure each month ----
-  # 100% when not defensive; user-chosen % when defensive
-  # Cash portion earns 3% annualized (approx. T-bill / money market yield)
-  reduce_frac <- input$wi_reduce_pct / 100
-  cash_monthly_ret <- 0.03 / 12
-  df <- df |>
-    mutate(exposure = ifelse(defensive, reduce_frac, 1),
-           rule_ret = exposure * eq_ret + (1 - exposure) * cash_monthly_ret)
+  # Portfolio value over time
+  output$wi_portfolio_chart <- renderPlotly({
+    df <- whatif_backtest()
+    if (is.null(df) || nrow(df) == 0) return(NULL)
+    
+    long <- df |>
+      select(date, `Buy & Hold` = buyhold_val, `Your Rule` = rule_val) |>
+      pivot_longer(-date, names_to = "Strategy", values_to = "Value")
+    
+    y_range <- range(long$Value, na.rm = TRUE)
+    y_pad <- diff(y_range) * 0.05
+    y_min <- y_range[1] - y_pad
+    y_max <- y_range[2] + y_pad
+    
+    # CRITICAL: clip recession periods to the backtest window AT THE DATA LEVEL
+    # ggplotly() ignores coord_cartesian(xlim), so we must filter & clip the
+    # rectangle coordinates themselves
+    bt_start <- min(df$date)
+    bt_end   <- max(df$date)
+    rec_in_window <- recession_periods |>
+      filter(end >= bt_start, start <= bt_end) |>
+      mutate(start = pmax(start, bt_start),
+             end   = pmin(end,   bt_end))
+    
+    p <- ggplot(long, aes(x = date, y = Value, color = Strategy))
+    if (nrow(rec_in_window) > 0) {
+      p <- p + geom_rect(
+        data = rec_in_window,
+        aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max),
+        fill = COL_RECESS, alpha = 0.55, inherit.aes = FALSE
+      )
+    }
+    p <- p +
+      geom_line(linewidth = 0.7) +
+      scale_color_manual(values = c("Buy & Hold" = COL_PRIMARY,
+                                    "Your Rule"  = COL_ACCENT)) +
+      scale_x_date(limits = c(bt_start, bt_end), expand = c(0, 0)) +
+      scale_y_continuous(limits = c(y_min, y_max), expand = c(0, 0)) +
+      labs(x = NULL, y = "Portfolio value (starting at $100)") +
+      theme_finance()
+    
+    ggplotly(p) |>
+      layout(xaxis = list(range = list(as.character(bt_start),
+                                       as.character(bt_end)))) |>
+      config(displayModeBar = FALSE)
+  })
   
-  # ---- 7. Compound returns into portfolio values starting at $100 ----
-  df <- df |>
-    mutate(buyhold_val = 100 * cumprod(1 + eq_ret),
-           rule_val    = 100 * cumprod(1 + rule_ret))
-  
-  df
-})
-
-# Portfolio value over time
-output$wi_portfolio_chart <- renderPlotly({
-  df <- whatif_backtest()
-  if (is.null(df) || nrow(df) == 0) return(NULL)
-  
-  long <- df |>
-    select(date, `Buy & Hold` = buyhold_val, `Your Rule` = rule_val) |>
-    pivot_longer(-date, names_to = "Strategy", values_to = "Value")
-  
-  y_range <- range(long$Value, na.rm = TRUE)
-  y_pad <- diff(y_range) * 0.05
-  y_min <- y_range[1] - y_pad
-  y_max <- y_range[2] + y_pad
-  
-  # CRITICAL: clip recession periods to the backtest window AT THE DATA LEVEL
-  # ggplotly() ignores coord_cartesian(xlim), so we must filter & clip the
-  # rectangle coordinates themselves
-  bt_start <- min(df$date)
-  bt_end   <- max(df$date)
-  rec_in_window <- recession_periods |>
-    filter(end >= bt_start, start <= bt_end) |>
-    mutate(start = pmax(start, bt_start),
-           end   = pmin(end,   bt_end))
-  
-  p <- ggplot(long, aes(x = date, y = Value, color = Strategy))
-  if (nrow(rec_in_window) > 0) {
-    p <- p + geom_rect(
-      data = rec_in_window,
-      aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max),
-      fill = COL_RECESS, alpha = 0.55, inherit.aes = FALSE
+  # Summary statistics table
+  output$wi_stats_table <- renderDT({
+    df <- whatif_backtest()
+    if (is.null(df) || nrow(df) == 0) {
+      return(datatable(
+        data.frame(Message = "Not enough data for this configuration."),
+        options = list(dom = "t"), rownames = FALSE
+      ))
+    }
+    
+    # Helper: compute summary stats for a returns vector & value series
+    stat_block <- function(ret_vec, val_vec) {
+      total_ret <- last(val_vec) / first(val_vec) - 1
+      n_years <- as.numeric(difftime(max(df$date), min(df$date),
+                                     units = "days")) / 365.25
+      ann_ret <- (1 + total_ret)^(1 / n_years) - 1
+      ann_vol <- sd(ret_vec, na.rm = TRUE) * sqrt(12)
+      sharpe <- ann_ret / ann_vol
+      # max drawdown
+      running_max <- cummax(val_vec)
+      drawdowns <- val_vec / running_max - 1
+      max_dd <- min(drawdowns, na.rm = TRUE)
+      list(total_ret = total_ret, ann_ret = ann_ret,
+           ann_vol = ann_vol, sharpe = sharpe, max_dd = max_dd)
+    }
+    
+    bh <- stat_block(df$eq_ret,   df$buyhold_val)
+    rl <- stat_block(df$rule_ret, df$rule_val)
+    n_defensive <- sum(df$defensive)
+    pct_defensive <- 100 * n_defensive / nrow(df)
+    
+    pct_fmt <- function(x) paste0(round(x * 100, 1), "%")
+    num_fmt <- function(x) round(x, 2)
+    
+    stats <- tibble(
+      Metric = c("Total return",
+                 "Annualized return",
+                 "Annualized volatility",
+                 "Sharpe ratio (rf = 0)",
+                 "Max drawdown",
+                 "Months in defensive mode"),
+      `Buy & Hold` = c(pct_fmt(bh$total_ret),
+                       pct_fmt(bh$ann_ret),
+                       pct_fmt(bh$ann_vol),
+                       num_fmt(bh$sharpe),
+                       pct_fmt(bh$max_dd),
+                       "0 (0.0%)"),
+      `Your Rule` = c(pct_fmt(rl$total_ret),
+                      pct_fmt(rl$ann_ret),
+                      pct_fmt(rl$ann_vol),
+                      num_fmt(rl$sharpe),
+                      pct_fmt(rl$max_dd),
+                      paste0(n_defensive, " (",
+                             round(pct_defensive, 1), "%)"))
     )
-  }
-  p <- p +
-    geom_line(linewidth = 0.7) +
-    scale_color_manual(values = c("Buy & Hold" = COL_PRIMARY,
-                                  "Your Rule"  = COL_ACCENT)) +
-    scale_x_date(limits = c(bt_start, bt_end), expand = c(0, 0)) +
-    scale_y_continuous(limits = c(y_min, y_max), expand = c(0, 0)) +
-    labs(x = NULL, y = "Portfolio value (starting at $100)") +
-    theme_finance()
+    
+    datatable(stats,
+              options = list(dom = "t", pageLength = 10),
+              rownames = FALSE,
+              class = "cell-border stripe")
+  })
   
-  ggplotly(p) |>
-    layout(xaxis = list(range = list(as.character(bt_start),
-                                     as.character(bt_end)))) |>
-    config(displayModeBar = FALSE)
-})
-
-# Summary statistics table
-output$wi_stats_table <- renderDT({
-  df <- whatif_backtest()
-  if (is.null(df) || nrow(df) == 0) {
-    return(datatable(
-      data.frame(Message = "Not enough data for this configuration."),
-      options = list(dom = "t"), rownames = FALSE
-    ))
-  }
+  # Signal-on timeline plot
+  output$wi_signal_timeline <- renderPlotly({
+    df <- whatif_backtest()
+    if (is.null(df) || nrow(df) == 0) return(NULL)
+    
+    # Defensive periods as start/end ranges for shading
+    df_d <- df |>
+      arrange(date) |>
+      mutate(grp = cumsum(defensive != dplyr::lag(defensive, default = FALSE))) |>
+      filter(defensive) |>
+      group_by(grp) |>
+      summarise(start = min(date), end = max(date), .groups = "drop")
+    
+    y_range <- range(df$signal_val, input$wi_threshold, na.rm = TRUE)
+    y_pad <- diff(y_range) * 0.05
+    y_min <- y_range[1] - y_pad
+    y_max <- y_range[2] + y_pad
+    
+    lab <- series_catalog$label[series_catalog$id == input$wi_indicator]
+    
+    # Clip recession periods to backtest window at the data level
+    # (plotly ignores coord_cartesian/scale limits)
+    bt_start <- min(df$date)
+    bt_end   <- max(df$date)
+    rec_in_window <- recession_periods |>
+      filter(end >= bt_start, start <= bt_end) |>
+      mutate(start = pmax(start, bt_start),
+             end   = pmin(end,   bt_end))
+    
+    p <- ggplot(df, aes(x = date, y = signal_val))
+    
+    if (nrow(rec_in_window) > 0) {
+      p <- p + geom_rect(
+        data = rec_in_window,
+        aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max),
+        fill = COL_RECESS, alpha = 0.55, inherit.aes = FALSE
+      )
+    }
+    
+    if (nrow(df_d) > 0) {
+      p <- p + geom_rect(
+        data = df_d,
+        aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max),
+        fill = "#E8B4B0", alpha = 0.45, inherit.aes = FALSE
+      )
+    }
+    
+    p <- p +
+      geom_line(color = COL_LINE, linewidth = 0.5) +
+      geom_hline(yintercept = input$wi_threshold,
+                 linetype = "dashed", color = COL_THRESH, linewidth = 0.6) +
+      scale_x_date(limits = c(bt_start, bt_end), expand = c(0, 0)) +
+      scale_y_continuous(limits = c(y_min, y_max), expand = c(0, 0)) +
+      labs(x = NULL, y = lab) +
+      theme_finance()
+    
+    ggplotly(p) |>
+      layout(xaxis = list(range = list(as.character(bt_start),
+                                       as.character(bt_end)))) |>
+      config(displayModeBar = FALSE)
+  })
   
-  # Helper: compute summary stats for a returns vector & value series
-  stat_block <- function(ret_vec, val_vec) {
-    total_ret <- last(val_vec) / first(val_vec) - 1
-    n_years <- as.numeric(difftime(max(df$date), min(df$date),
-                                   units = "days")) / 365.25
-    ann_ret <- (1 + total_ret)^(1 / n_years) - 1
-    ann_vol <- sd(ret_vec, na.rm = TRUE) * sqrt(12)
-    sharpe <- ann_ret / ann_vol
-    # max drawdown
-    running_max <- cummax(val_vec)
-    drawdowns <- val_vec / running_max - 1
-    max_dd <- min(drawdowns, na.rm = TRUE)
-    list(total_ret = total_ret, ann_ret = ann_ret,
-         ann_vol = ann_vol, sharpe = sharpe, max_dd = max_dd)
-  }
-  
-  bh <- stat_block(df$eq_ret,   df$buyhold_val)
-  rl <- stat_block(df$rule_ret, df$rule_val)
-  n_defensive <- sum(df$defensive)
-  pct_defensive <- 100 * n_defensive / nrow(df)
-  
-  pct_fmt <- function(x) paste0(round(x * 100, 1), "%")
-  num_fmt <- function(x) round(x, 2)
-  
-  stats <- tibble(
-    Metric = c("Total return",
-               "Annualized return",
-               "Annualized volatility",
-               "Sharpe ratio (rf = 0)",
-               "Max drawdown",
-               "Months in defensive mode"),
-    `Buy & Hold` = c(pct_fmt(bh$total_ret),
-                     pct_fmt(bh$ann_ret),
-                     pct_fmt(bh$ann_vol),
-                     num_fmt(bh$sharpe),
-                     pct_fmt(bh$max_dd),
-                     "0 (0.0%)"),
-    `Your Rule` = c(pct_fmt(rl$total_ret),
-                    pct_fmt(rl$ann_ret),
-                    pct_fmt(rl$ann_vol),
-                    num_fmt(rl$sharpe),
-                    pct_fmt(rl$max_dd),
-                    paste0(n_defensive, " (",
-                           round(pct_defensive, 1), "%)"))
-  )
-  
-  datatable(stats,
-            options = list(dom = "t", pageLength = 10),
-            rownames = FALSE,
-            class = "cell-border stripe")
-})
-
-# Signal-on timeline plot
-output$wi_signal_timeline <- renderPlotly({
-  df <- whatif_backtest()
-  if (is.null(df) || nrow(df) == 0) return(NULL)
-  
-  # Defensive periods as start/end ranges for shading
-  df_d <- df |>
-    arrange(date) |>
-    mutate(grp = cumsum(defensive != dplyr::lag(defensive, default = FALSE))) |>
-    filter(defensive) |>
-    group_by(grp) |>
-    summarise(start = min(date), end = max(date), .groups = "drop")
-  
-  y_range <- range(df$signal_val, input$wi_threshold, na.rm = TRUE)
-  y_pad <- diff(y_range) * 0.05
-  y_min <- y_range[1] - y_pad
-  y_max <- y_range[2] + y_pad
-  
-  lab <- series_catalog$label[series_catalog$id == input$wi_indicator]
-  
-  # Clip recession periods to backtest window at the data level
-  # (plotly ignores coord_cartesian/scale limits)
-  bt_start <- min(df$date)
-  bt_end   <- max(df$date)
-  rec_in_window <- recession_periods |>
-    filter(end >= bt_start, start <= bt_end) |>
-    mutate(start = pmax(start, bt_start),
-           end   = pmin(end,   bt_end))
-  
-  p <- ggplot(df, aes(x = date, y = signal_val))
-  
-  if (nrow(rec_in_window) > 0) {
-    p <- p + geom_rect(
-      data = rec_in_window,
-      aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max),
-      fill = COL_RECESS, alpha = 0.55, inherit.aes = FALSE
-    )
-  }
-  
-  if (nrow(df_d) > 0) {
-    p <- p + geom_rect(
-      data = df_d,
-      aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max),
-      fill = "#E8B4B0", alpha = 0.45, inherit.aes = FALSE
-    )
-  }
-  
-  p <- p +
-    geom_line(color = COL_LINE, linewidth = 0.5) +
-    geom_hline(yintercept = input$wi_threshold,
-               linetype = "dashed", color = COL_THRESH, linewidth = 0.6) +
-    scale_x_date(limits = c(bt_start, bt_end), expand = c(0, 0)) +
-    scale_y_continuous(limits = c(y_min, y_max), expand = c(0, 0)) +
-    labs(x = NULL, y = lab) +
-    theme_finance()
-  
-  ggplotly(p) |>
-    layout(xaxis = list(range = list(as.character(bt_start),
-                                     as.character(bt_end)))) |>
-    config(displayModeBar = FALSE)
-})
-
-# Text interpretation generated dynamically
-output$wi_interpretation <- renderUI({
-  df <- whatif_backtest()
-  if (is.null(df) || nrow(df) == 0) {
-    return(HTML("<p>Not enough data to interpret.</p>"))
-  }
-  
-  # Quick stats for the narrative
-  total_bh <- last(df$buyhold_val) / first(df$buyhold_val) - 1
-  total_rl <- last(df$rule_val)    / first(df$rule_val) - 1
-  diff_ret <- total_rl - total_bh
-  
-  # Max drawdowns
-  dd_bh <- min(df$buyhold_val / cummax(df$buyhold_val) - 1)
-  dd_rl <- min(df$rule_val    / cummax(df$rule_val)    - 1)
-  
-  pct_def <- 100 * sum(df$defensive) / nrow(df)
-  
-  winner <- if (diff_ret > 0) "your rule" else "buy-and-hold"
-  less_painful <- if (dd_rl > dd_bh) "your rule" else "buy-and-hold"
-  
-  HTML(paste0(
-    "<div style='font-size:13px; line-height:1.6; color:", COL_TEXT, ";'>",
-    "<p>Over this backtest window, <strong>", winner, "</strong> ended up with the higher
+  # Text interpretation generated dynamically
+  output$wi_interpretation <- renderUI({
+    df <- whatif_backtest()
+    if (is.null(df) || nrow(df) == 0) {
+      return(HTML("<p>Not enough data to interpret.</p>"))
+    }
+    
+    # Quick stats for the narrative
+    total_bh <- last(df$buyhold_val) / first(df$buyhold_val) - 1
+    total_rl <- last(df$rule_val)    / first(df$rule_val) - 1
+    diff_ret <- total_rl - total_bh
+    
+    # Max drawdowns
+    dd_bh <- min(df$buyhold_val / cummax(df$buyhold_val) - 1)
+    dd_rl <- min(df$rule_val    / cummax(df$rule_val)    - 1)
+    
+    pct_def <- 100 * sum(df$defensive) / nrow(df)
+    
+    winner <- if (diff_ret > 0) "your rule" else "buy-and-hold"
+    less_painful <- if (dd_rl > dd_bh) "your rule" else "buy-and-hold"
+    
+    HTML(paste0(
+      "<div style='font-size:13px; line-height:1.6; color:", COL_TEXT, ";'>",
+      "<p>Over this backtest window, <strong>", winner, "</strong> ended up with the higher
       total return (difference: ", round(diff_ret * 100, 1), " percentage points).
       Your rule was in defensive mode for <strong>", round(pct_def, 1),
-    "%</strong> of all months.</p>",
-    
-    "<p>On the downside-protection front, <strong>", less_painful,
-    "</strong> had the milder worst drawdown
+      "%</strong> of all months.</p>",
+      
+      "<p>On the downside-protection front, <strong>", less_painful,
+      "</strong> had the milder worst drawdown
       (buy-and-hold: ", round(dd_bh * 100, 1), "%, your rule: ",
-    round(dd_rl * 100, 1), "%).</p>",
-    
-    "<p><strong style='color:", COL_PRIMARY, ";'>What this tells you:</strong>
+      round(dd_rl * 100, 1), "%).</p>",
+      
+      "<p><strong style='color:", COL_PRIMARY, ";'>What this tells you:</strong>
       If your rule beat buy-and-hold, the signal you chose triggered close enough
       to actual market downturns to save you more than the false alarms cost.
       If buy-and-hold won, the rule was too eager to step out: the signal generated
@@ -1579,10 +1684,11 @@ output$wi_interpretation <- renderUI({
       Try adjusting the threshold (stricter = fewer false alarms but later warnings)
       or the hold period (shorter = quicker reentry, but less protection if the
       drawdown drags on).</p>",
-    "</div>"
-  ))
-})
-
+      "</div>"
+    ))
+  })
+  
+}
 
 
 # =============================================================================
