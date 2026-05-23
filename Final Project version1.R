@@ -1508,14 +1508,10 @@ server <- function(input, output, session) {
       geom_line(linewidth = 0.7) +
       scale_color_manual(values = c("Buy & Hold" = COL_PRIMARY,
                                     "Your Rule"  = COL_ACCENT)) +
-      scale_x_date(limits = c(bt_start, bt_end), expand = c(0, 0)) +
-      scale_y_continuous(limits = c(y_min, y_max), expand = c(0, 0)) +
       labs(x = NULL, y = "Portfolio value (starting at $100)") +
       theme_finance()
     
     ggplotly(p) |>
-      layout(xaxis = list(range = list(as.character(bt_start),
-                                       as.character(bt_end)))) |>
       config(displayModeBar = FALSE)
   })
   
