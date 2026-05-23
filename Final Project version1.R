@@ -1485,36 +1485,18 @@ server <- function(input, output, session) {
     y_pad <- diff(y_range) * 0.05
     y_min <- y_range[1] - y_pad
     y_max <- y_range[2] + y_pad
-    
-    # CRITICAL: clip recession periods to the backtest window AT THE DATA LEVEL
-    # ggplotly() ignores coord_cartesian(xlim), so we must filter & clip the
-    # rectangle coordinates themselves
-    bt_start <- min(df$date)
-    bt_end   <- max(df$date)
-    rec_in_window <- recession_periods |>
-      filter(end >= bt_start, start <= bt_end) |>
-      mutate(start = pmax(start, bt_start),
-             end   = pmin(end,   bt_end))
-    
-    p <- ggplot(long, aes(x = date, y = Value, color = Strategy))
-    if (nrow(rec_in_window) > 0) {
-      p <- p + geom_rect(
-        data = rec_in_window,
-        aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max),
-        fill = COL_RECESS, alpha = 0.55, inherit.aes = FALSE
-      )
-    }
-    p <- p +
-      geom_line(linewidth = 0.7) +
+    p <- ggplot(long, aes(x = date, y = Value, color = Strategy,
+                          text = paste0("Date: ", format(date, "%Y-%m"),
+                                        "<br>", Strategy, ": $",
+                                        round(Value, 0)))) +
+      geom_line(aes(group = Strategy), linewidth = 0.7) +
       scale_color_manual(values = c("Buy & Hold" = COL_PRIMARY,
                                     "Your Rule"  = COL_ACCENT)) +
       labs(x = NULL, y = "Portfolio value (starting at $100)") +
       theme_finance()
     
-    ggplotly(p) |>
-      config(displayModeBar = FALSE)
+    ggplotly(p, tooltip = "text") |> config(displayModeBar = FALSE)
   })
-  
   # Summary statistics table
   output$wi_stats_table <- renderDT({
     df <- whatif_backtest()
@@ -1582,63 +1564,31 @@ server <- function(input, output, session) {
     df <- whatif_backtest()
     if (is.null(df) || nrow(df) == 0) return(NULL)
     
-    # Defensive periods as start/end ranges for shading
-    df_d <- df |>
-      arrange(date) |>
-      mutate(grp = cumsum(defensive != dplyr::lag(defensive, default = FALSE))) |>
-      filter(defensive) |>
-      group_by(grp) |>
-      summarise(start = min(date), end = max(date), .groups = "drop")
-    
-    y_range <- range(df$signal_val, input$wi_threshold, na.rm = TRUE)
-    y_pad <- diff(y_range) * 0.05
-    y_min <- y_range[1] - y_pad
-    y_max <- y_range[2] + y_pad
-    
     lab <- series_catalog$label[series_catalog$id == input$wi_indicator]
     
-    # Clip recession periods to backtest window at the data level
-    # (plotly ignores coord_cartesian/scale limits)
-    bt_start <- min(df$date)
-    bt_end   <- max(df$date)
-    rec_in_window <- recession_periods |>
-      filter(end >= bt_start, start <= bt_end) |>
-      mutate(start = pmax(start, bt_start),
-             end   = pmin(end,   bt_end))
+    df_plot <- df |>
+      mutate(state = case_when(
+        defensive ~ "Defensive",
+        TRUE      ~ "Normal"
+      ))
     
-    p <- ggplot(df, aes(x = date, y = signal_val))
-    
-    if (nrow(rec_in_window) > 0) {
-      p <- p + geom_rect(
-        data = rec_in_window,
-        aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max),
-        fill = COL_RECESS, alpha = 0.55, inherit.aes = FALSE
-      )
-    }
-    
-    if (nrow(df_d) > 0) {
-      p <- p + geom_rect(
-        data = df_d,
-        aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max),
-        fill = "#E8B4B0", alpha = 0.45, inherit.aes = FALSE
-      )
-    }
-    
-    p <- p +
-      geom_line(color = COL_LINE, linewidth = 0.5) +
+    p <- ggplot(df_plot, aes(x = date, y = signal_val)) +
+      geom_line(color = COL_LINE, linewidth = 0.4, alpha = 0.7) +
+      geom_point(aes(color = state, text = paste0(
+        "Date: ", format(date, "%Y-%m"),
+        "<br>Value: ", round(signal_val, 2),
+        "<br>State: ", state
+      )), size = 1.3, alpha = 0.85) +
       geom_hline(yintercept = input$wi_threshold,
                  linetype = "dashed", color = COL_THRESH, linewidth = 0.6) +
-      scale_x_date(limits = c(bt_start, bt_end), expand = c(0, 0)) +
-      scale_y_continuous(limits = c(y_min, y_max), expand = c(0, 0)) +
+      scale_color_manual(values = c("Defensive" = "#A4453E",
+                                    "Normal"    = COL_PRIMARY),
+                         name = "Rule state") +
       labs(x = NULL, y = lab) +
       theme_finance()
     
-    ggplotly(p) |>
-      layout(xaxis = list(range = list(as.character(bt_start),
-                                       as.character(bt_end)))) |>
-      config(displayModeBar = FALSE)
-  })
-  
+    ggplotly(p, tooltip = "text") |> config(displayModeBar = FALSE)
+  })  
   # Text interpretation generated dynamically
   output$wi_interpretation <- renderUI({
     df <- whatif_backtest()
