@@ -490,17 +490,14 @@ ui <- dashboardPage(
     titleWidth = 320
   ),
   
-  # ---- Sidebar menu ----
-  dashboardSidebar(
-    width = 320,
-    sidebarMenu(
-      id = "tabs",
-      menuItem("About",                  tabName = "about",     icon = icon("info-circle")),
-      menuItem("1. Signal Explorer",     tabName = "signal",    icon = icon("chart-line")),
-      menuItem("2. Recession Dashboard", tabName = "dashboard", icon = icon("gauge"))
-    )
+  sidebarMenu(
+    id = "tabs",
+    menuItem("About",                  tabName = "about",     icon = icon("info-circle")),
+    menuItem("1. Signal Explorer",     tabName = "signal",    icon = icon("chart-line")),
+    menuItem("2. Recession Dashboard", tabName = "dashboard", icon = icon("gauge")),
+    menuItem("3. What If Simulator",   tabName = "whatif",    icon = icon("flask"))
   ),
-  
+
   # ---- Main body ----
   dashboardBody(
     
