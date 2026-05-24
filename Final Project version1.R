@@ -102,6 +102,7 @@ series_catalog <- tibble::tribble(
   "INDPRO",          "Industrial Production Index",         "Real Economy",     "low",      "m",
   "A191RL1Q225SBEA", "Real GDP Growth (% q/q ann.)",        "Real Economy",     "low",      "q",
   "UMCSENT",         "U. Michigan Consumer Sentiment",      "Real Economy",     "low",      "m",
+  "PCEC96",          "Real PCE (Consumption, BEA)",         "Real Economy",     "low",      "m",
   # ---- Equity (outcome variable) ----
   # Note: we DON'T use the SP500 series, because under FRED's licensing
   #       agreement with S&P Dow Jones, SP500 only goes back ~10 years.
