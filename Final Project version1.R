@@ -877,12 +877,15 @@ ui <- dashboardPage(
                     status = "info", solidHeader = TRUE,
                     div(class = "chart-help", HTML(
                       "<strong>How to read:</strong> Shows the indicator's history
-                over the backtest period. The <strong>gold dashed line</strong>
-                is your threshold. <strong>Pink shaded regions</strong> are
-                months when your rule was in defensive mode (equity exposure
-                reduced). Compare these to the <strong>grey recession bands</strong>:
-                early warnings before recessions are good; defensive periods
-                far from any recession are false alarms that hurt returns."
+                  over the backtest period. The <strong>gold dashed line</strong>
+                  is your threshold. <strong style='color:#A4453E;'>Red dots</strong>
+                  are months when your rule was in defensive mode (equity exposure
+                  reduced to your chosen %); <strong style='color:#1F3A5F;'>blue dots</strong>
+                  are normal months (100% invested). Hovering over a point shows
+                  the exact date, value, and state. Defensive periods that line up
+                  with past recessions (1990, 2001, 2008) suggest the signal
+                  worked; long defensive stretches without a recession nearby are
+                  false alarms that cost you returns."
                     )),
                     plotlyOutput("wi_signal_timeline", height = "300px")
                 )
