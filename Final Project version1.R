@@ -1,7 +1,6 @@
 # =============================================================================
 # A Macroeconomic Dashboard for Individual Investors
 # Author: Huan Hong
-# Prototype Check-In
 # =============================================================================
 #
 # Project description:
@@ -778,27 +777,26 @@ ui <- dashboardPage(
                 )
               ),
               
-              # ---- Heat map ----
+              # ---- Recession lead-time chart ----
               fluidRow(
-                box(width = 12, title = "Predictive Heat Map",
+                box(width = 12, title = "Signal Scorecard",
                     status = "info", solidHeader = TRUE,
                     div(class = "chart-help", HTML(
-                      "<strong>How to read this heat map:</strong> Each <strong>row</strong>
-               is one indicator with a default trigger rule (e.g. yield curve &lt; 0).
-               Each <strong>column</strong> is a forward time horizon. The cell
-               shows the average S&amp;P 500 return across all historical events
-               where that indicator triggered.
-               <span style='color:#A4453E;font-weight:600;'>Red</span>
-               = the market averaged a negative return after this signal,
-               <span style='color:#5B8C5A;font-weight:600;'>green</span> = positive.
-               Use this to compare which signals have the strongest historical
-               track record at which horizons."
+                      "<strong>How to read this scorecard:</strong> Each row is one
+                    indicator's default trigger rule, evaluated across all historical
+                    triggers. <em>Triggers</em> = how many times this signal fired in
+                    history. <em>Hits</em> = how many of those were followed by a real
+                    recession within 24 months. <em>Hit rate</em> = the ratio.
+                    <em>Avg lead time</em> = average months between trigger and the
+                    next recession (only for hits). <em>Rating</em> combines hit rate
+                    and lead time into a 1&ndash;5 star score &mdash; higher is better.
+                    <strong>Sort by clicking column headers</strong> to see which
+                    signal has the best track record."
                     )),
-                    plotlyOutput("dash_heatmap", height = "440px")
+                    DTOutput("dash_scorecard")
                 )
               )
       ),
-      
       # ===========================================================
       # MODULE 3: What If Counterfactual Rule Simulator
       # ===========================================================
@@ -1158,101 +1156,152 @@ server <- function(input, output, session) {
       formatStyle("Group", fontWeight = "600", color = COL_PRIMARY)
   })
   
-  # Predictive-performance heat map
-  default_trigger_rules <- tibble::tribble(
-    ~id,               ~rule_label,                 ~direction,  ~threshold,
-    "T10Y2Y",          "T10Y2Y < 0",                "below",      0,
-    "T10Y3M",          "T10Y3M < 0",                "below",      0,
-    "BAA10Y",          "Baa-10Y > 3",               "above",      3,
-    "BAMLH0A0HYM2",    "HY spread > 6",             "above",      6,
-    "VIXCLS",          "VIX > 25",                  "above",     25,
-    "UNRATE",          "UNRATE > 5",                "above",      5,
-    "INDPRO",          "INDPRO YoY change < 0",     "below_yoy",  0,
-    "A191RL1Q225SBEA", "Real GDP growth < 0",       "below",      0,
-    "UMCSENT",         "U-Mich sentiment < 75",     "below",     75
+  # ---- Recession lead-time visualization ----
+  # Default 5 indicators (the most classic / interpretable signals)
+  leadtime_rules <- tibble::tribble(
+    ~id,               ~rule_label,                       ~direction,  ~threshold,
+    # ---- Financial market ----
+    "T10Y2Y",          "10Y-2Y Yield Curve < 0",          "below",      0,
+    "T10Y3M",          "10Y-3M Yield Curve < 0",          "below",      0,
+    "BAA10Y",          "Baa-10Y Credit Spread > 3",       "above",      3,
+    "BAMLH0A0HYM2",    "HY Spread > 6",                   "above",      6,
+    "VIXCLS",          "VIX > 25",                        "above",      25,
+    # ---- Real economy ----
+    "UNRATE",          "Unemployment > 5%",               "above",      5,
+    "INDPRO",          "Industrial Production declining", "below_yoy",  0,
+    "A191RL1Q225SBEA", "Real GDP Growth < 0",             "below",      0,
+    "UMCSENT",         "U-Mich Sentiment < 75",           "below",      75
   )
   
-  heatmap_data <- reactive({
-    rules <- default_trigger_rules
-    
-    purrr::map_dfr(seq_len(nrow(rules)), function(i) {
-      id  <- rules$id[i]
-      rl  <- rules$rule_label[i]
-      dir <- rules$direction[i]
-      thr <- rules$threshold[i]
+  # Recession start dates (used to compute lead times)
+  recession_starts <- recession_periods |> arrange(start) |> pull(start)
+  
+  leadtime_data <- reactive({
+    purrr::map_dfr(seq_len(nrow(leadtime_rules)), function(i) {
+      id  <- leadtime_rules$id[i]
+      rl  <- leadtime_rules$rule_label[i]
+      dir <- leadtime_rules$direction[i]
+      thr <- leadtime_rules$threshold[i]
       
       df <- get_series(id) |> to_monthly()
       if (nrow(df) == 0) return(tibble())
       
-      if (dir == "below_yoy") {
-        df <- df |>
-          arrange(date) |>
-          mutate(value = (value / dplyr::lag(value, 12) - 1) * 100) |>
-          filter(!is.na(value))
-        eff_dir <- "below"
-      } else {
-        eff_dir <- dir
-      }
-      
-      meets <- if (eff_dir == "below") df$value < thr else df$value > thr
-      df$meets <- meets
+      df <- df |>
+        arrange(date) |>
+        {\(d) if (dir == "below_yoy") {
+          d |>
+            mutate(value = (value / dplyr::lag(value, 12) - 1) * 100) |>
+            filter(!is.na(value)) |>
+            mutate(meets = value < thr)
+        } else if (dir == "below") {
+          d |> mutate(meets = value < thr)
+        } else {
+          d |> mutate(meets = value > thr)
+        }}()
       
       events <- df |>
-        mutate(group_id = cumsum(meets != dplyr::lag(meets, default = FALSE))) |>
+        mutate(grp = cumsum(meets != dplyr::lag(meets, default = FALSE))) |>
         filter(meets) |>
-        group_by(group_id) |>
-        summarise(trigger_date = min(date), .groups = "drop")
+        group_by(grp) |>
+        summarise(trigger_date = min(date), .groups = "drop") |>
+        select(-grp)
+      
       if (nrow(events) == 0) return(tibble())
       
-      ev <- events |>
-        left_join(
-          sp500_monthly |> select(date, ret_3m, ret_6m, ret_12m, ret_24m),
-          by = c("trigger_date" = "date")
-        )
+      # Compute lead time using vectorized base R (avoid rowwise + curly-brace bug)
+      next_rec <- sapply(events$trigger_date, function(td) {
+        future_recs <- recession_starts[recession_starts >= td]
+        if (length(future_recs) == 0) NA else as.numeric(min(future_recs))
+      })
+      next_rec <- as.Date(next_rec, origin = "1970-01-01")
       
-      tibble(
-        Indicator = paste0(series_catalog$label[series_catalog$id == id],
-                           "  (", rl, ")"),
-        `3M`  = mean(ev$ret_3m,  na.rm = TRUE),
-        `6M`  = mean(ev$ret_6m,  na.rm = TRUE),
-        `12M` = mean(ev$ret_12m, na.rm = TRUE),
-        `24M` = mean(ev$ret_24m, na.rm = TRUE),
-        n_events = sum(!is.na(ev$ret_12m))
+      lead_months <- ifelse(
+        is.na(next_rec),
+        NA_real_,
+        round(as.numeric(difftime(next_rec, events$trigger_date,
+                                  units = "days")) / 30.44)
       )
+      
+      events |>
+        mutate(
+          next_rec    = next_rec,
+          lead_months = lead_months,
+          hit         = !is.na(lead_months) & lead_months <= 24,
+          hit         = as.character(hit),
+          indicator   = rl
+        )
     })
   })
-  
-  output$dash_heatmap <- renderPlotly({
-    hd <- heatmap_data()
-    if (nrow(hd) == 0) return(NULL)
+  output$dash_scorecard <- renderDT({
+    ev <- leadtime_data()
+    if (nrow(ev) == 0) {
+      return(datatable(
+        data.frame(Message = "No data available."),
+        options = list(dom = "t"), rownames = FALSE
+      ))
+    }
     
-    long <- hd |>
-      select(-n_events) |>
-      pivot_longer(c(`3M`, `6M`, `12M`, `24M`),
-                   names_to = "Horizon", values_to = "AvgReturn") |>
-      mutate(Horizon = factor(Horizon,
-                              levels = c("3M", "6M", "12M", "24M")))
+    # Aggregate per indicator
+    score_df <- ev |>
+      mutate(hit_flag = (hit == "TRUE" | hit == TRUE)) |>
+      group_by(indicator) |>
+      summarise(
+        n_events    = n(),
+        n_hits      = sum(hit_flag, na.rm = TRUE),
+        hit_rate    = n_hits / n_events,
+        avg_lead    = mean(lead_months[hit_flag], na.rm = TRUE),
+        .groups = "drop"
+      ) |>
+      mutate(
+        avg_lead = ifelse(is.nan(avg_lead), NA_real_, avg_lead),
+        # Composite score: 60% hit rate + 40% normalized lead time
+        # Lead time normalized to 0-1 by dividing by 24 (max possible)
+        lead_score = ifelse(is.na(avg_lead), 0, avg_lead / 24),
+        composite  = 0.6 * hit_rate + 0.4 * lead_score,
+        # Translate composite (0-1) to 1-5 stars
+        stars = pmax(1, pmin(5, round(composite * 5 + 0.5))),
+        rating = strrep("\u2605", stars)  # filled star characters
+      ) |>
+      arrange(desc(composite))
     
-    p <- ggplot(long, aes(x = Horizon, y = Indicator, fill = AvgReturn,
-                          text = paste0("Indicator: ", Indicator,
-                                        "<br>Horizon: ", Horizon,
-                                        "<br>Avg return: ",
-                                        round(AvgReturn, 1), "%"))) +
-      geom_tile(color = "white", linewidth = 1) +
-      geom_text(aes(label = ifelse(is.na(AvgReturn), "-",
-                                   paste0(round(AvgReturn, 1), "%"))),
-                size = 3.2, color = COL_TEXT) +
-      scale_fill_gradient2(low = COL_BAD, mid = COL_NEUTRAL, high = COL_GOOD,
-                           midpoint = 0, name = "Avg return %",
-                           na.value = "#F0F0F2") +
-      labs(x = "Forward horizon", y = NULL) +
-      theme_finance() +
-      theme(axis.text.y = element_text(size = 9),
-            panel.grid = element_blank())
+    # Pretty display dataframe
+    display_df <- score_df |>
+      mutate(
+        `Hit rate`    = paste0(round(hit_rate * 100), "%"),
+        `Hits / Triggers` = paste0(n_hits, " / ", n_events),
+        `Avg lead time` = ifelse(is.na(avg_lead),
+                                 "n/a",
+                                 paste0(round(avg_lead, 1), " months")),
+        Rating = rating
+      ) |>
+      select(Indicator = indicator,
+             `Hits / Triggers`,
+             `Hit rate`,
+             `Avg lead time`,
+             Rating)
     
-    ggplotly(p, tooltip = "text") |> config(displayModeBar = FALSE)
+    datatable(display_df,
+              options = list(pageLength = 10, dom = "t",
+                             ordering = TRUE,
+                             columnDefs = list(
+                               list(className = "dt-center",
+                                    targets = 1:4)
+                             )),
+              rownames = FALSE,
+              class = "cell-border stripe") |>
+      formatStyle("Indicator",
+                  fontWeight = "600",
+                  color = COL_PRIMARY) |>
+      formatStyle("Rating",
+                  color = COL_ACCENT,
+                  fontSize = "16px",
+                  fontWeight = "600",
+                  textAlign = "center") |>
+      formatStyle("Hit rate",
+                  fontWeight = "600",
+                  color = styleInterval(c("49%", "69%"),
+                                        c(COL_BAD, COL_MUTED, COL_GOOD)))
   })
-  
   # ============================================================
   # NEW: Composite recession-pressure index (option D)
   # ============================================================
