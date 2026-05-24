@@ -877,15 +877,14 @@ ui <- dashboardPage(
                     status = "info", solidHeader = TRUE,
                     div(class = "chart-help", HTML(
                       "<strong>How to read:</strong> Shows the indicator's history
-                  over the backtest period. The <strong>gold dashed line</strong>
-                  is your threshold. <strong style='color:#A4453E;'>Red dots</strong>
-                  are months when your rule was in defensive mode (equity exposure
-                  reduced to your chosen %); <strong style='color:#1F3A5F;'>blue dots</strong>
-                  are normal months (100% invested). Hovering over a point shows
-                  the exact date, value, and state. Defensive periods that line up
-                  with past recessions (1990, 2001, 2008) suggest the signal
-                  worked; long defensive stretches without a recession nearby are
-                  false alarms that cost you returns."
+                over the backtest period. The <strong>gold dashed line</strong>
+                is your threshold. <strong style='color:#A4453E;'>Red dots</strong>
+                and <strong style='color:#C97870;'>pink shading</strong> mark
+                months when your rule was in defensive mode;
+                <strong style='color:#1F3A5F;'>blue dots</strong> are normal
+                months. <strong>Grey vertical bands</strong> are NBER recessions:
+                if pink lines up with or precedes grey, the signal worked;
+                pink far from any grey band is a false alarm."
                     )),
                     plotlyOutput("wi_signal_timeline", height = "300px")
                 )
@@ -1475,7 +1474,6 @@ server <- function(input, output, session) {
     df
   })
   
-  # Portfolio value over time
   output$wi_portfolio_chart <- renderPlotly({
     df <- whatif_backtest()
     if (is.null(df) || nrow(df) == 0) return(NULL)
@@ -1484,15 +1482,43 @@ server <- function(input, output, session) {
       select(date, `Buy & Hold` = buyhold_val, `Your Rule` = rule_val) |>
       pivot_longer(-date, names_to = "Strategy", values_to = "Value")
     
-    y_range <- range(long$Value, na.rm = TRUE)
-    y_pad <- diff(y_range) * 0.05
-    y_min <- y_range[1] - y_pad
-    y_max <- y_range[2] + y_pad
-    p <- ggplot(long, aes(x = date, y = Value, color = Strategy,
-                          text = paste0("Date: ", format(date, "%Y-%m"),
-                                        "<br>", Strategy, ": $",
-                                        round(Value, 0)))) +
-      geom_line(aes(group = Strategy), linewidth = 0.7) +
+    y_max <- max(long$Value, na.rm = TRUE) * 1.1
+    y_min <- min(long$Value, na.rm = TRUE) * 0.95
+    
+    bt_start <- min(df$date)
+    bt_end   <- max(df$date)
+    rec_in_window <- recession_periods |>
+      filter(end >= bt_start, start <= bt_end) |>
+      mutate(start = pmax(start, bt_start),
+             end   = pmin(end,   bt_end))
+    
+    # Build recession shading data: 4 corners per rectangle, NA between
+    rec_shade_df <- if (nrow(rec_in_window) > 0) {
+      purrr::map_dfr(seq_len(nrow(rec_in_window)), function(i) {
+        tibble(
+          x = c(rec_in_window$start[i], rec_in_window$start[i],
+                rec_in_window$end[i],   rec_in_window$end[i],
+                NA),
+          y = c(y_min, y_max, y_max, y_min, NA)
+        )
+      })
+    } else tibble(x = as.Date(character()), y = numeric())
+    
+    p <- ggplot(long, aes(x = date, y = Value))
+    
+    if (nrow(rec_shade_df) > 0) {
+      p <- p + geom_polygon(data = rec_shade_df,
+                            aes(x = x, y = y),
+                            fill = "#8C919B", alpha = 0.20,
+                            inherit.aes = FALSE)
+    }
+    
+    p <- p +
+      geom_line(aes(color = Strategy, group = Strategy,
+                    text = paste0("Date: ", format(date, "%Y-%m"),
+                                  "<br>", Strategy, ": $",
+                                  round(Value, 0))),
+                linewidth = 0.7) +
       scale_color_manual(values = c("Buy & Hold" = COL_PRIMARY,
                                     "Your Rule"  = COL_ACCENT)) +
       labs(x = NULL, y = "Portfolio value (starting at $100)") +
@@ -1561,8 +1587,7 @@ server <- function(input, output, session) {
               rownames = FALSE,
               class = "cell-border stripe")
   })
-  
-  # Signal-on timeline plot
+  #signal timeline
   output$wi_signal_timeline <- renderPlotly({
     df <- whatif_backtest()
     if (is.null(df) || nrow(df) == 0) return(NULL)
@@ -1575,7 +1600,63 @@ server <- function(input, output, session) {
         TRUE      ~ "Normal"
       ))
     
-    p <- ggplot(df_plot, aes(x = date, y = signal_val)) +
+    y_range <- range(df$signal_val, input$wi_threshold, na.rm = TRUE)
+    y_pad <- diff(y_range) * 0.1
+    y_min <- y_range[1] - y_pad
+    y_max <- y_range[2] + y_pad
+    
+    bt_start <- min(df$date)
+    bt_end   <- max(df$date)
+    rec_in_window <- recession_periods |>
+      filter(end >= bt_start, start <= bt_end) |>
+      mutate(start = pmax(start, bt_start),
+             end   = pmin(end,   bt_end))
+    
+    rec_shade_df <- if (nrow(rec_in_window) > 0) {
+      purrr::map_dfr(seq_len(nrow(rec_in_window)), function(i) {
+        tibble(
+          x = c(rec_in_window$start[i], rec_in_window$start[i],
+                rec_in_window$end[i],   rec_in_window$end[i],
+                NA),
+          y = c(y_min, y_max, y_max, y_min, NA)
+        )
+      })
+    } else tibble(x = as.Date(character()), y = numeric())
+    # Build defensive-period shading (pink) — same polygon trick
+    df_defensive_periods <- df |>
+      arrange(date) |>
+      mutate(grp = cumsum(defensive != dplyr::lag(defensive, default = FALSE))) |>
+      filter(defensive) |>
+      group_by(grp) |>
+      summarise(start = min(date), end = max(date), .groups = "drop")
+    
+    def_shade_df <- if (nrow(df_defensive_periods) > 0) {
+      purrr::map_dfr(seq_len(nrow(df_defensive_periods)), function(i) {
+        tibble(
+          x = c(df_defensive_periods$start[i], df_defensive_periods$start[i],
+                df_defensive_periods$end[i],   df_defensive_periods$end[i],
+                NA),
+          y = c(y_min, y_max, y_max, y_min, NA)
+        )
+      })
+    } else tibble(x = as.Date(character()), y = numeric())
+    
+    p <- ggplot(df_plot, aes(x = date, y = signal_val))
+    
+    if (nrow(rec_shade_df) > 0) {
+      p <- p + geom_polygon(data = rec_shade_df,
+                            aes(x = x, y = y),
+                            fill = "#8C919B", alpha = 0.20,
+                            inherit.aes = FALSE)
+    }
+    #pink
+    if (nrow(def_shade_df) > 0) {
+      p <- p + geom_polygon(data = def_shade_df,
+                            aes(x = x, y = y),
+                            fill = "#E8B4B0", alpha = 0.35,
+                            inherit.aes = FALSE)
+    }
+    p <- p +
       geom_line(color = COL_LINE, linewidth = 0.4, alpha = 0.7) +
       geom_point(aes(color = state, text = paste0(
         "Date: ", format(date, "%Y-%m"),
@@ -1591,7 +1672,7 @@ server <- function(input, output, session) {
       theme_finance()
     
     ggplotly(p, tooltip = "text") |> config(displayModeBar = FALSE)
-  })  
+  })
   # Text interpretation generated dynamically
   output$wi_interpretation <- renderUI({
     df <- whatif_backtest()
