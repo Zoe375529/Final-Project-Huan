@@ -685,12 +685,15 @@ ui <- dashboardPage(
                     status = "success", solidHeader = TRUE,
                     div(class = "chart-help", HTML(
                       "<strong>How to read:</strong> Each box shows the spread of S&amp;P 500
-               returns after every historical trigger, for that horizon.
-               The <strong>line inside the box</strong> is the median; the box covers
-               the middle 50% of cases. <strong>If the box sits below zero</strong>,
-               the market <em>usually</em> fell after this signal. A
-               <strong>wide box</strong> means historical outcomes varied a lot,
-               i.e. the signal is noisy."
+                  returns after every historical trigger, for that horizon. The
+                  <strong>line inside the box</strong> is the median; the box covers the
+                  middle 50% of cases. <strong style='color:#A4453E;'>Red diamonds</strong>
+                  mark the mean, and the <strong style='color:#A4453E;'>red bars</strong>
+                  span the 5th to 95th percentile of historical outcomes &mdash; in
+                  other words, 90% of past returns fell within that range.
+                  <strong>If the red band crosses zero</strong>, the signal's historical
+                  outcomes include both significant gains and losses; in those cases the
+                  signal alone doesn't reliably predict the direction of returns."
                     )),
                     plotlyOutput("sig_distribution", height = "350px")
                 )
@@ -1015,7 +1018,7 @@ server <- function(input, output, session) {
     ggplotly(p, tooltip = "text") |> config(displayModeBar = FALSE)
   })
   
-  # Distribution boxplots over the four horizons
+  # Distribution boxplots over the four horizons + 95% CI on the mean
   output$sig_distribution <- renderPlotly({
     ev <- trigger_events()
     if (nrow(ev) == 0) return(NULL)
@@ -1028,20 +1031,54 @@ server <- function(input, output, session) {
                               levels = c("ret_3m", "ret_6m", "ret_12m", "ret_24m"),
                               labels = c("3 months", "6 months", "12 months", "24 months")))
     
+    # Per-horizon: mean + 5th–95th percentile band
+    ci_df <- long |>
+      group_by(horizon) |>
+      summarise(
+        n      = n(),
+        mean   = mean(ret, na.rm = TRUE),
+        ci_lo  = quantile(ret, 0.05, na.rm = TRUE),
+        ci_hi  = quantile(ret, 0.95, na.rm = TRUE),
+        .groups = "drop"
+      ) |>
+      filter(n >= 2)
+    
     p <- ggplot(long, aes(x = horizon, y = ret)) +
       geom_hline(yintercept = 0, linetype = "dashed",
                  color = COL_MUTED, linewidth = 0.4) +
-      geom_boxplot(fill = COL_PRIMARY, alpha = 0.15, color = COL_PRIMARY,
-                   outlier.alpha = 0.5, outlier.color = COL_PRIMARY,
-                   linewidth = 0.5, width = 0.5) +
-      geom_jitter(width = 0.12, alpha = 0.55, size = 1.6, color = COL_ACCENT) +
-      labs(x = "Horizon after trigger", y = "S&P 500 return (%)") +
+      geom_boxplot(fill = COL_PRIMARY, alpha = 0.10, color = COL_PRIMARY,
+                   outlier.alpha = 0.4, outlier.color = COL_PRIMARY,
+                   linewidth = 0.4, width = 0.5) +
+      geom_jitter(width = 0.10, alpha = 0.45, size = 1.4, color = COL_MUTED) +
+      # 95% CI error bars (on the mean)
+      # Wider, more visible 5th-95th percentile band
+      geom_errorbar(data = ci_df,
+                    aes(x = horizon, ymin = ci_lo, ymax = ci_hi),
+                    inherit.aes = FALSE,
+                    width = 0.25, color = COL_BAD, linewidth = 1.3,
+                    alpha = 0.9) +
+      # Translucent band fill between ci_lo and ci_hi
+      geom_rect(data = ci_df,
+                aes(xmin = as.numeric(horizon) - 0.08,
+                    xmax = as.numeric(horizon) + 0.08,
+                    ymin = ci_lo, ymax = ci_hi),
+                inherit.aes = FALSE,
+                fill = COL_BAD, alpha = 0.15) +
+      # Mean point (red diamond)
+      geom_point(data = ci_df,
+                 aes(x = horizon, y = mean),
+                 inherit.aes = FALSE,
+                 shape = 18, size = 4, color = COL_BAD) +
+      labs(x = "Horizon after trigger",
+           y = "S&P 500 return (%)",
+           caption = "Red diamond = mean; red band = 5th-95th percentile range") +
       theme_finance() +
-      theme(legend.position = "none")
+      theme(legend.position = "none",
+            plot.caption = element_text(size = 9, color = COL_MUTED,
+                                        hjust = 0))
     
     ggplotly(p) |> config(displayModeBar = FALSE)
-  })
-  
+  })  
   # Trigger events table
   output$sig_table <- renderDT({
     ev <- trigger_events()
